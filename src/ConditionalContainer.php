@@ -6,13 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Laravel\Nova\Contracts\RelatableField;
-use Laravel\Nova\Fields\BelongsTo;
 use Laravel\Nova\Fields\Field;
 use Laravel\Nova\Http\Controllers\ResourceUpdateController;
 use Laravel\Nova\Http\Controllers\UpdateFieldController;
 use Laravel\Nova\Http\Requests\NovaRequest;
 use Laravel\Nova\Resource;
 use logipar\Logipar;
+use Whitecube\NovaFlexibleContent\Flexible;
 
 class ConditionalContainer extends Field
 {
@@ -36,7 +36,7 @@ class ConditionalContainer extends Field
     /**
      * @var Collection
      */
-    const OPERATORS = [
+    public const OPERATORS = [
         '>=', '<=', '<', '>',
         '!==', '!=',
         '===', '==', '=',
@@ -53,10 +53,10 @@ class ConditionalContainer extends Field
     public function __construct(array $fields)
     {
 
-        parent::__construct('conditional_container_' . Str::random(10));
-
         $this->fields = collect($fields);
         $this->expressions = collect();
+
+        parent::__construct('conditional_container_' . md5($this->fields->whereInstanceOf(Field::class)->pluck('attribute')->join('.')));
 
         $this->withMeta([ 'operation' => 'some' ]);
 
@@ -86,13 +86,26 @@ class ConditionalContainer extends Field
     {
 
         /**
-         * Avoid unselected fields coming with pre-filled data on update
+         * Clone everything before resolving to avoid fields being mutated when nested in some sort of repeating wrapper
+         */
+        $this->fields = $this->fields->map(static function ($field) {
+
+            return clone $field;
+
+        });
+
+        /**
+         * Avoid unselected fields coming with pre-filled data on update when using a flexible field
          */
         if (resolve(NovaRequest::class)->route()->controller instanceof UpdateFieldController) {
 
-            if (count($this->resolveDependencyFieldUsingResource($resource)) === 0) {
+            if ($this->fields->pluck('meta.__has_flexible_field__')->filter()->isNotEmpty() === false) {
 
-                return;
+                if (count($this->resolveDependencyFieldUsingResource($resource)) === 0) {
+
+                    return;
+
+                }
 
             }
 
@@ -123,13 +136,13 @@ class ConditionalContainer extends Field
 
         }
 
-        return function () use ($callbacks) {
+        return static function () use ($callbacks) {
 
             foreach ($callbacks as $callback) {
 
                 if (is_callable($callback)) {
 
-                    call_user_func($callback);
+                    $callback();
 
                 }
 
@@ -147,7 +160,7 @@ class ConditionalContainer extends Field
     private function relationalOperatorLeafResolver(Collection $values, string $literal): bool
     {
 
-        [ $attribute, $operator, $value ] = $this->splitLiteral($literal);
+        [ $attribute, $operator, $value ] = self::splitLiteral($literal);
 
         if ($values->keys()->contains($attribute)) {
 
@@ -164,8 +177,8 @@ class ConditionalContainer extends Field
 
         $conditionValue = trim($conditionValue, '"\'');
 
-        if (in_array($operator, [ '<', '>', '<=', '>=' ]) && $conditionValue ||
-            (is_numeric($attributeValue) && is_numeric($conditionValue))) {
+        if ((is_numeric($attributeValue) && is_numeric($conditionValue)) ||
+            (in_array($operator, [ '<', '>', '<=', '>=' ]) && $conditionValue)) {
 
             $conditionValue = (int) $conditionValue;
             $attributeValue = (int) $attributeValue;
@@ -231,12 +244,12 @@ class ConditionalContainer extends Field
     {
 
         $operator = collect(self::OPERATORS)
-            ->filter(function ($operator) use ($literal) {
+            ->filter(static function ($operator) use ($literal) {
                 return strpos($literal, $operator) !== false;
             })
             ->first();
 
-        [ $attribute, $value ] = collect(explode($operator, $literal))->map(function ($value) {
+        [ $attribute, $value ] = collect(explode($operator, $literal))->map(static function ($value) {
             return trim($value);
         });
 
@@ -287,12 +300,10 @@ class ConditionalContainer extends Field
             foreach ($this->fields as $field) {
 
                 if ($field instanceof Field &&
-                    !blank($field->attribute) &&
-                    !$field->isReadonly($request) &&
+                    !$field instanceof Flexible &&
                     !$field instanceof RelatableField &&
-                    !$field instanceof \Whitecube\NovaFlexibleContent\Flexible &&
-                    !$field instanceof \Benjacho\BelongsToManyField\BelongsToManyField &&
-                    !$field instanceof \DigitalCreative\ConditionalContainer\ConditionalContainer) {
+                    !blank($field->attribute) &&
+                    !$field->isReadonly($request)) {
 
                     $resource->setAttribute($field->attribute, $field->value);
 
@@ -332,6 +343,12 @@ class ConditionalContainer extends Field
 
         $data = collect($resource->toArray());
 
+        if (!method_exists($resource, 'getRelations')) {
+
+            return $data;
+
+        }
+
         foreach ($resource->getRelations() as $relationName => $relation) {
 
             if ($relation instanceof Collection) {
@@ -354,7 +371,7 @@ class ConditionalContainer extends Field
     {
         return array_merge([
             'fields' => $this->fields,
-            'expressions' => $this->expressions->map(function ($expression) {
+            'expressions' => $this->expressions->map(static function ($expression) {
 
                 return is_callable($expression) ? $expression() : $expression;
 
