@@ -26,6 +26,7 @@ use NovaAttachMany\AttachMany;
 use Whitecube\NovaFlexibleContent\Flexible;
 use Whitecube\NovaFlexibleContent\Layouts\Collection as LayoutCollection;
 use Whitecube\NovaFlexibleContent\Layouts\Layout;
+use Laravel\Nova\Resource;
 
 trait HasConditionalContainer
 {
@@ -34,12 +35,11 @@ trait HasConditionalContainer
      * Get the panels that are available for the given detail request.
      *
      * @param NovaRequest $request
-     *
      * @return array
      */
-    public function availablePanelsForDetail($request)
+    public function availablePanelsForDetail(NovaRequest $request, Resource $resource)
     {
-        $panels = parent::availablePanelsForDetail($request);
+        $panels = parent::availablePanelsForDetail($request, $resource);
         $fields = parent::availableFields($request);
 
         return $this->mergePanels($panels, $this->findAllActiveContainers($fields, $this));
@@ -67,9 +67,9 @@ trait HasConditionalContainer
      *
      * @return array
      */
-    public function availablePanelsForUpdate($request)
+    public function availablePanelsForUpdate(NovaRequest $request, Resource $resource = null)
     {
-        $panels = parent::availablePanelsForUpdate($request);
+        $panels = parent::availablePanelsForUpdate($request, $resource);
         $fields = parent::availableFields($request);
 
         return $this->mergePanels($panels, $this->findAllContainers($fields));
@@ -164,7 +164,8 @@ trait HasConditionalContainer
 
         }
 
-        $allFields = $this->fields($request);
+        $method = $this->fieldsMethod($request);
+        $allFields = $this->{$method}($request);
         $containers = $this->findAllContainers($allFields);
         $expressionsMap = $containers->flatMap->expressions;
         $flexibleContent = $this->findAllFlexibleContentFields($allFields);
